@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
@@ -7,7 +8,7 @@ from analytics_collector.config import Settings
 from analytics_collector.repository import InMemoryEventRepository
 
 
-def make_client(**overrides):
+def make_client(geo_lookup=None, **overrides):
     repo = InMemoryEventRepository()
     config = {
         "allowed_origins": ["https://leaderboard.example"],
@@ -18,7 +19,7 @@ def make_client(**overrides):
     }
     config.update(overrides)
     settings = Settings(**config)
-    app = create_app(settings=settings, repository=repo)
+    app = create_app(settings=settings, repository=repo, geo_lookup=geo_lookup)
     return TestClient(app), repo
 
 
@@ -80,6 +81,104 @@ def test_valid_batch_is_accepted_and_enriched():
         "rateLimited": False,
         "source": "browser",
     }
+
+
+def test_cf_ipcountry_header_sets_geo_country_without_lookup():
+    async def unexpected_lookup(_ip):
+        raise AssertionError("IPinfo lookup should not run when CF-IPCountry is present")
+
+    client, repo = make_client(geo_lookup=unexpected_lookup)
+
+    res = client.post(
+        "/v1/events/batch",
+        json=sample_batch(),
+        headers=headers(**{"CF-IPCountry": "US", "X-Forwarded-For": "8.8.8.8"}),
+    )
+
+    assert res.status_code == 202
+    assert repo.events[0]["geo"] == {"country": "US", "region": None, "city": None}
+
+
+def test_ipinfo_lookup_sets_geo_country_when_cf_header_is_absent():
+    async def lookup(ip):
+        assert ip == "8.8.8.8"
+        return {"country": "US"}
+
+    client, repo = make_client(geo_lookup=lookup)
+
+    res = client.post(
+        "/v1/events/batch",
+        json=sample_batch(),
+        headers=headers(**{"X-Forwarded-For": "8.8.8.8"}),
+    )
+
+    assert res.status_code == 202
+    assert repo.events[0]["geo"] == {"country": "US", "region": None, "city": None}
+
+
+def test_x_forwarded_for_with_port_is_normalized_before_geo_lookup():
+    async def lookup(ip):
+        assert ip == "8.8.8.8"
+        return {"country_code": "US"}
+
+    client, repo = make_client(geo_lookup=lookup)
+
+    res = client.post(
+        "/v1/events/batch",
+        json=sample_batch(),
+        headers=headers(**{"X-Forwarded-For": "8.8.8.8:43210"}),
+    )
+
+    assert res.status_code == 202
+    assert repo.events[0]["geo"] == {"country": "US", "region": None, "city": None}
+
+
+def test_x_real_ip_is_used_when_x_forwarded_for_is_absent():
+    async def lookup(ip):
+        assert ip == "8.8.4.4"
+        return {"country_code": "US"}
+
+    client, repo = make_client(geo_lookup=lookup)
+
+    res = client.post(
+        "/v1/events/batch",
+        json=sample_batch(),
+        headers=headers(**{"X-Real-IP": "8.8.4.4"}),
+    )
+
+    assert res.status_code == 202
+    assert repo.events[0]["geo"] == {"country": "US", "region": None, "city": None}
+
+
+def test_local_ip_skips_geo_lookup():
+    async def unexpected_lookup(_ip):
+        raise AssertionError("local IPs should not trigger IPinfo lookup")
+
+    client, repo = make_client(geo_lookup=unexpected_lookup)
+
+    res = client.post(
+        "/v1/events/batch",
+        json=sample_batch(),
+        headers=headers(**{"X-Forwarded-For": "127.0.0.1"}),
+    )
+
+    assert res.status_code == 202
+    assert repo.events[0]["geo"] == {"country": None, "region": None, "city": None}
+
+
+def test_geo_debug_logging_explains_skipped_local_ip(caplog):
+    client, repo = make_client(geo_lookup_debug=True)
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        res = client.post(
+            "/v1/events/batch",
+            json=sample_batch(),
+            headers=headers(**{"X-Forwarded-For": "127.0.0.1"}),
+        )
+
+    assert res.status_code == 202
+    assert repo.events[0]["geo"] == {"country": None, "region": None, "city": None}
+    assert "geo lookup skipped: non-public client ip" in caplog.text
 
 
 def test_unknown_event_name_is_rejected():

@@ -18,9 +18,11 @@ class Settings(BaseSettings):
     mongo_database: str = "analytics"
     mongo_collection: str = "analytics_events"
     ip_hash_salt: str = "change-me"
+    ipinfo_lite_token: str | None = None
+    geo_lookup_timeout_seconds: float = 1.0
+    geo_lookup_debug: bool = False
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

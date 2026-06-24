@@ -36,6 +36,9 @@ Copy `.env.example` to `.env`.
 | `MONGO_DATABASE` | `analytics` | MongoDB database name. |
 | `MONGO_COLLECTION` | `analytics_events` | Raw event collection name. |
 | `IP_HASH_SALT` | `change-me` | Salt used to hash client IPs before storage. Change in production. |
+| `IPINFO_LITE_TOKEN` | unset | Optional IPinfo Lite token. When set, public client IPs are resolved to country-level geo after `CF-IPCountry` fallback. |
+| `GEO_LOOKUP_TIMEOUT_SECONDS` | `1.0` | Timeout for IPinfo Lite country lookup. Lookup failures do not reject analytics events. |
+| `GEO_LOOKUP_DEBUG` | `false` | When true, emits geo lookup decision logs to help local debugging. Logs may include client IPs; keep disabled in production. |
 
 ## API
 
@@ -54,6 +57,7 @@ Headers:
 - `Origin`: must match `ALLOWED_ORIGINS` when configured.
 - `Referer`: accepted as a fallback origin source.
 - `X-Analytics-Site-Id`: required only when `ANALYTICS_SITE_ID` is configured.
+- `CF-IPCountry`: optional country-code shortcut when provided by the deployment platform/CDN.
 
 Request:
 
@@ -142,7 +146,7 @@ Each accepted frontend event is expanded into one MongoDB document:
 	"userAgent": "browser user-agent",
 	"referer": "https://example.com/",
 	"origin": "https://example.com",
-	"geo": { "country": null, "region": null, "city": null },
+	"geo": { "country": "US", "region": null, "city": null },
 	"trust": {
 		"originOk": true,
 		"siteIdOk": true,
@@ -153,7 +157,18 @@ Each accepted frontend event is expanded into one MongoDB document:
 }
 ```
 
-`geo` is intentionally a placeholder in v1. Add IP-to-geo lookup server-side later.
+`geo.country` is stored as an ISO 3166-1 alpha-2 country code when available.
+The collector first trusts a valid `CF-IPCountry` header. If that header is absent and
+`IPINFO_LITE_TOKEN` is configured, it calls IPinfo Lite for public client IPs only.
+Local, private, reserved, unknown, and lookup-failure cases keep `geo` values as `null`.
+Client IP extraction uses `x-forwarded-for` first, then `x-real-ip`, then
+`cf-connecting-ip`, then the socket client host. Header IPs with ports are normalized
+before geo lookup.
+
+For local geo debugging, set `GEO_LOOKUP_DEBUG=true` and watch the server logs. The
+collector will log whether it used `CF-IPCountry`, skipped a non-public IP, skipped
+because `IPINFO_LITE_TOKEN` is missing, called IPinfo Lite, or received an unusable
+provider response.
 
 ## MongoDB Indexes
 

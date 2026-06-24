@@ -1,11 +1,13 @@
 from datetime import UTC, datetime
 from hashlib import sha256
+from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from analytics_collector.config import Settings, get_settings
+from analytics_collector.geo import Geo, GeoLookup, empty_geo, geo_debug, resolve_geo
 from analytics_collector.models import AcceptedResponse, AnalyticsBatch
 from analytics_collector.rate_limit import InMemoryRateLimiter
 from analytics_collector.repository import EventRepository, MongoEventRepository
@@ -15,6 +17,7 @@ def create_app(
     *,
     settings: Settings | None = None,
     repository: EventRepository | None = None,
+    geo_lookup: GeoLookup | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     repository = repository or MongoEventRepository(
@@ -36,6 +39,12 @@ def create_app(
     app.state.settings = settings
     app.state.repository = repository
     app.state.limiter = limiter
+    geo_debug(
+        settings,
+        "geo lookup debug enabled: has_ipinfo_token=%s timeout_seconds=%s",
+        bool(settings.ipinfo_lite_token),
+        settings.geo_lookup_timeout_seconds,
+    )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -63,6 +72,7 @@ def create_app(
         if not limiter.allow(rate_key):
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate limited")
 
+        geo = await resolve_geo(ip=ip, headers=request.headers, settings=settings, geo_lookup=geo_lookup)
         enriched = enrich_events(
             batch=batch,
             request=request,
@@ -70,6 +80,7 @@ def create_app(
             origin=origin,
             referer=referer,
             ip=ip,
+            geo=geo,
         )
         await repository.insert_events(enriched)
         return AcceptedResponse(accepted=len(enriched))
@@ -99,12 +110,35 @@ def origin_allowed(settings: Settings, origin: str | None, referer: str | None) 
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        ip = normalize_ip(forwarded_for.split(",", 1)[0])
+        if ip:
+            return ip
+    for header in ("x-real-ip", "cf-connecting-ip"):
+        ip = normalize_ip(request.headers.get(header))
+        if ip:
+            return ip
     if request.client:
-        return request.client.host
+        return normalize_ip(request.client.host) or request.client.host
     return "unknown"
+
+
+def normalize_ip(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip().strip('"')
+    if not value:
+        return None
+    if value.startswith("[") and "]" in value:
+        value = value[1 : value.index("]")]
+    elif value.count(":") == 1:
+        host, _port = value.rsplit(":", 1)
+        value = host
+    try:
+        return str(ip_address(value))
+    except ValueError:
+        return None
 
 
 def hash_ip(ip: str, salt: str) -> str:
@@ -119,10 +153,12 @@ def enrich_events(
     origin: str | None,
     referer: str | None,
     ip: str,
+    geo: Geo | None = None,
 ) -> list[dict]:
     received_at = datetime.now(UTC)
     ip_hash = hash_ip(ip, settings.ip_hash_salt)
     user_agent = request.headers.get("user-agent")
+    geo = geo or empty_geo()
     trust = {
         "originOk": True,
         "siteIdOk": True,
@@ -143,7 +179,7 @@ def enrich_events(
                 "userAgent": user_agent,
                 "referer": referer,
                 "origin": origin,
-                "geo": {"country": None, "region": None, "city": None},
+                "geo": geo.copy(),
                 "trust": trust.copy(),
             }
         )
