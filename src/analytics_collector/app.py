@@ -37,13 +37,13 @@ def create_app(
     limiter = InMemoryRateLimiter(settings.rate_limit_per_minute)
     app = FastAPI(title="Analytics Collector", version="0.1.0")
 
-    if settings.allowed_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.allowed_origins,
-            allow_methods=["POST", "GET", "OPTIONS"],
-            allow_headers=["authorization", "content-type", "x-analytics-site-id"],
-        )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_origins or ["*"],
+        allow_methods=["POST", "GET", "OPTIONS"],
+        allow_headers=["authorization", "content-type", "x-analytics-site-id"],
+        allow_credentials=False,
+    )
 
     app.state.settings = settings
     app.state.repository = repository

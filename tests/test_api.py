@@ -217,6 +217,22 @@ def test_site_id_required_when_configured():
     assert accepted.status_code == 202
 
 
+def test_empty_allowed_origins_allows_cors_preflight_without_origin_gate():
+    client, _ = make_client(allowed_origins=[])
+
+    res = client.options(
+        "/v1/events/batch",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "*"
+
+
 def test_rate_limit_rejects_excess_batches():
     client, _ = make_client(rate_limit_per_minute=1)
 

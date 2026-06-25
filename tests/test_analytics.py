@@ -26,6 +26,10 @@ def auth_headers():
     return {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 
 
+def event_headers():
+    return {"Origin": "https://leaderboard.example", "User-Agent": "pytest"}
+
+
 def event(
     *,
     visitor_id="visitor-1",
@@ -203,6 +207,48 @@ def test_distribution_endpoints_return_events_pages_and_countries():
     assert events.json()["items"] == [{"eventName": "page_view", "count": 2}, {"eventName": "csv_downloaded", "count": 1}]
     assert pages.json()["items"] == [{"path": "/models", "count": 2}, {"path": "/exports", "count": 1}]
     assert countries.json()["items"] == [{"country": "US", "count": 2}, {"country": "JP", "count": 1}]
+
+
+def test_compare_event_is_ingested_and_payload_model_is_queryable():
+    client, repo = make_client()
+    model = "sentence-transformers/all-MiniLM-L6-v2"
+    batch = {
+        "visitorId": "visitor-compare",
+        "sessionId": "session-compare",
+        "events": [
+            {
+                "id": "evt-compare-model-added",
+                "eventName": "compare_model_changed",
+                "sentAt": datetime.now(UTC).isoformat(),
+                "page": {"path": "/compare", "queryKeys": []},
+                "payload": {
+                    "action": "added",
+                    "benchmark": "MTEB(eng, v2)",
+                    "model": model,
+                    "modelCount": 2,
+                },
+            }
+        ],
+    }
+
+    ingest = client.post("/v1/events/batch", json=batch, headers=event_headers())
+
+    assert ingest.status_code == 202
+    assert ingest.json() == {"accepted": 1}
+    assert len(repo.events) == 1
+    saved = repo.events[0]
+    assert saved["eventName"] == "compare_model_changed"
+    assert saved["payload"]["model"] == model
+
+    metric_date = saved["receivedAt"].date().isoformat()
+    aggregate(client, metric_date, metric_date)
+    compares = client.get(
+        f"/v1/analytics/compares?startDate={metric_date}&endDate={metric_date}",
+        headers=auth_headers(),
+    )
+
+    assert compares.status_code == 200
+    assert compares.json()["models"] == [{"model": model, "sessions": 1, "events": 1, "visitors": 1}]
 
 
 def test_domain_distribution_endpoints_rank_by_sessions_with_event_and_visitor_context():
