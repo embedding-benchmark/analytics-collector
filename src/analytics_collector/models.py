@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,3 +50,12 @@ class AnalyticsBatch(BaseModel):
 class AcceptedResponse(BaseModel):
     accepted: int
 
+
+class AnalyticsDateRange(BaseModel):
+    startDate: date
+    endDate: date
+
+
+class AggregateResponse(BaseModel):
+    status: str
+    rawEvents: int
