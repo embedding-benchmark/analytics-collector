@@ -34,7 +34,9 @@ def event(
     received_at: datetime,
     page_path="/models",
     country="US",
+    payload=None,
 ):
+    payload = {"path": page_path} if payload is None else payload
     return {
         "visitorId": visitor_id,
         "sessionId": session_id,
@@ -43,7 +45,7 @@ def event(
         "sentAt": received_at.isoformat(),
         "receivedAt": received_at,
         "page": {"path": page_path, "queryKeys": []},
-        "payload": {"path": page_path},
+        "payload": payload,
         "geo": {"country": country, "region": None, "city": None},
         "trust": {"originOk": True, "siteIdOk": True, "schemaOk": True, "rateLimited": False, "source": "browser"},
     }
@@ -121,10 +123,26 @@ def test_aggregate_builds_summary_series_and_is_idempotent():
     assert summary.status_code == 200
     body = summary.json()
     assert body["granularity"] == "hour"
-    assert body["totals"] == {"pageViews": 2, "uniqueVisitors": 2, "sessions": 2, "events": 4}
+    assert body["totals"] == {"pageViews": 2, "uniqueVisitors": 2, "newVisitors": 2, "returningVisitors": 1, "sessions": 2, "events": 4}
     assert body["series"] == [
-        {"bucket": "2026-06-01T10:00:00Z", "pageViews": 1, "uniqueVisitors": 1, "sessions": 1, "events": 2},
-        {"bucket": "2026-06-01T11:00:00Z", "pageViews": 1, "uniqueVisitors": 2, "sessions": 2, "events": 2},
+        {
+            "bucket": "2026-06-01T10:00:00Z",
+            "pageViews": 1,
+            "uniqueVisitors": 1,
+            "newVisitors": 1,
+            "returningVisitors": 0,
+            "sessions": 1,
+            "events": 2,
+        },
+        {
+            "bucket": "2026-06-01T11:00:00Z",
+            "pageViews": 1,
+            "uniqueVisitors": 2,
+            "newVisitors": 1,
+            "returningVisitors": 1,
+            "sessions": 2,
+            "events": 2,
+        },
     ]
 
 
@@ -146,8 +164,24 @@ def test_long_range_summary_uses_daily_granularity():
     assert summary.status_code == 200
     assert summary.json()["granularity"] == "day"
     assert summary.json()["series"] == [
-        {"bucket": "2026-06-01", "pageViews": 1, "uniqueVisitors": 1, "sessions": 1, "events": 1},
-        {"bucket": "2026-06-10", "pageViews": 1, "uniqueVisitors": 1, "sessions": 1, "events": 1},
+        {
+            "bucket": "2026-06-01",
+            "pageViews": 1,
+            "uniqueVisitors": 1,
+            "newVisitors": 1,
+            "returningVisitors": 0,
+            "sessions": 1,
+            "events": 1,
+        },
+        {
+            "bucket": "2026-06-10",
+            "pageViews": 1,
+            "uniqueVisitors": 1,
+            "newVisitors": 1,
+            "returningVisitors": 0,
+            "sessions": 1,
+            "events": 1,
+        },
     ]
 
 
@@ -169,6 +203,136 @@ def test_distribution_endpoints_return_events_pages_and_countries():
     assert events.json()["items"] == [{"eventName": "page_view", "count": 2}, {"eventName": "csv_downloaded", "count": 1}]
     assert pages.json()["items"] == [{"path": "/models", "count": 2}, {"path": "/exports", "count": 1}]
     assert countries.json()["items"] == [{"country": "US", "count": 2}, {"country": "JP", "count": 1}]
+
+
+def test_domain_distribution_endpoints_rank_by_sessions_with_event_and_visitor_context():
+    client, repo = make_client()
+    base = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+    repo.events.extend(
+        [
+            event(
+                visitor_id="visitor-1",
+                session_id="session-1",
+                event_name="page_view",
+                received_at=base,
+                payload={"benchmarkId": "MTEB(eng, v2)", "modelId": "bge-large-en"},
+            ),
+            event(
+                visitor_id="visitor-1",
+                session_id="session-1",
+                event_name="page_view",
+                received_at=base + timedelta(minutes=1),
+                payload={"benchmarkName": "MTEB English v2", "modelName": "BGE Large EN"},
+            ),
+            event(
+                visitor_id="visitor-2",
+                session_id="session-2",
+                event_name="search_changed",
+                received_at=base + timedelta(minutes=2),
+                payload={"query": "retrieval", "surface": "models"},
+            ),
+            event(
+                visitor_id="visitor-2",
+                session_id="session-2",
+                event_name="search_changed",
+                received_at=base + timedelta(minutes=3),
+                payload={"query": "retrieval", "surface": "models"},
+            ),
+            event(
+                visitor_id="visitor-3",
+                session_id="session-3",
+                event_name="filter_changed",
+                received_at=base + timedelta(minutes=4),
+                payload={"filterKey": "task", "filterValue": "Retrieval", "task": "Retrieval", "surface": "benchmarks"},
+            ),
+            event(
+                visitor_id="visitor-4",
+                session_id="session-4",
+                event_name="compare_opened",
+                received_at=base + timedelta(minutes=5),
+                payload={"models": ["bge-large-en", "e5-large-v2"], "benchmarkId": "MTEB(eng, v2)"},
+            ),
+            event(
+                visitor_id="visitor-5",
+                session_id="session-5",
+                event_name="compare_model_changed",
+                received_at=base + timedelta(minutes=6),
+                payload={"modelIds": ["bge-large-en", "gte-large"], "benchmarkId": "MTEB(eng, v2)"},
+            ),
+            event(
+                visitor_id="visitor-6",
+                session_id="session-6",
+                event_name="filter_changed",
+                received_at=base + timedelta(days=2),
+                payload={"filterKey": "language", "filterValue": "English"},
+            ),
+            event(
+                visitor_id="visitor-7",
+                session_id="session-7",
+                event_name="search_changed",
+                received_at=base + timedelta(minutes=7),
+                payload={"query": ""},
+            ),
+            event(
+                visitor_id="visitor-8",
+                session_id="session-8",
+                event_name="page_view",
+                received_at=base + timedelta(minutes=8),
+                page_path="/benchmarks/mteb-english-v2",
+                payload={"path": "/benchmarks/mteb-english-v2", "title": "MTEB English v2"},
+            ),
+            event(
+                visitor_id="visitor-9",
+                session_id="session-9",
+                event_name="page_view",
+                received_at=base + timedelta(minutes=9),
+                page_path="/models/gte-large",
+                payload={"path": "/models/gte-large", "title": "GTE Large"},
+            ),
+            event(
+                visitor_id="visitor-10",
+                session_id="session-10",
+                event_name="page_view",
+                received_at=base + timedelta(minutes=10),
+                page_path="/tasks/reranking",
+                payload={"path": "/tasks/reranking", "title": "Reranking"},
+            ),
+        ]
+    )
+    aggregate(client)
+
+    benchmarks = client.get("/v1/analytics/benchmarks?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    models = client.get("/v1/analytics/models?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    searches = client.get("/v1/analytics/searches?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    filters = client.get("/v1/analytics/filters?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    compares = client.get("/v1/analytics/compares?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    tasks = client.get("/v1/analytics/tasks?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+
+    assert benchmarks.status_code == 200
+    assert benchmarks.json()["items"] == [
+        {"benchmark": "MTEB(eng, v2)", "sessions": 3, "events": 3, "visitors": 3},
+        {"benchmark": "MTEB English v2", "sessions": 2, "events": 2, "visitors": 2},
+    ]
+    assert models.json()["items"] == [
+        {"model": "bge-large-en", "sessions": 3, "events": 3, "visitors": 3},
+        {"model": "BGE Large EN", "sessions": 1, "events": 1, "visitors": 1},
+        {"model": "GTE Large", "sessions": 1, "events": 1, "visitors": 1},
+        {"model": "e5-large-v2", "sessions": 1, "events": 1, "visitors": 1},
+        {"model": "gte-large", "sessions": 1, "events": 1, "visitors": 1},
+    ]
+    assert searches.json()["items"] == [{"query": "retrieval", "sessions": 1, "events": 2, "visitors": 1}]
+    assert filters.json()["items"] == [{"filterKey": "task", "filterValue": "Retrieval", "sessions": 1, "events": 1, "visitors": 1}]
+    assert compares.json()["items"] == [
+        {"comparison": "bge-large-en vs e5-large-v2", "sessions": 1, "events": 1, "visitors": 1},
+        {"comparison": "bge-large-en vs gte-large", "sessions": 1, "events": 1, "visitors": 1},
+    ]
+    assert tasks.json()["items"] == [
+        {"task": "Reranking", "sessions": 1, "events": 1, "visitors": 1},
+        {"task": "Retrieval", "sessions": 1, "events": 1, "visitors": 1},
+    ]
+    day_metric = repo.daily_metrics[0]
+    assert day_metric["benchmarkMetrics"]["MTEB English v2"]["pathCounts"]["/benchmarks/mteb-english-v2"] == 1
+    assert day_metric["benchmarkMetrics"]["MTEB English v2"]["titleCounts"] == {"MTEB English v2": 1}
 
 
 def test_funnel_counts_ordered_steps_within_same_session():
