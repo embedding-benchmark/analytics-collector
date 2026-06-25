@@ -145,14 +145,47 @@ GET /v1/analytics/summary?startDate=2026-06-01&endDate=2026-06-30
 GET /v1/analytics/events?startDate=2026-06-01&endDate=2026-06-30
 GET /v1/analytics/pages?startDate=2026-06-01&endDate=2026-06-30
 GET /v1/analytics/countries?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/benchmarks?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/models?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/searches?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/filters?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/compares?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/tasks?startDate=2026-06-01&endDate=2026-06-30
 GET /v1/analytics/funnels?startDate=2026-06-01&endDate=2026-06-30
 GET /v1/analytics/retention?startDate=2026-06-01&endDate=2026-06-30
 ```
 
 Summary uses automatic granularity: ranges of 7 days or less return hourly buckets;
 longer ranges return daily buckets. Totals include PV, unique visitors, sessions,
-and event count. Distribution endpoints return ranked event names, page paths, and
-countries.
+and event count. Distribution endpoints return ranked event names, page paths,
+countries, benchmarks, models, searches, filters, and comparisons.
+
+Domain analytics use `sessions` as the primary ranking metric and include `events`
+and `visitors` as secondary context. Product frontends should send these payload
+fields when available:
+
+```json
+{
+	"benchmarkId": "MTEB(eng, v2)",
+	"benchmarkName": "MTEB English v2",
+	"modelId": "bge-large-en",
+	"modelName": "BGE Large EN",
+	"task": "Retrieval",
+	"query": "retrieval",
+	"filterKey": "task",
+	"filterValue": "Retrieval",
+	"models": ["bge-large-en", "e5-large-v2"]
+}
+```
+
+`search_changed` uses `query`, `filter_changed` uses `filterKey` and `filterValue`,
+and compare events use `models`, `modelIds`, or `modelNames`. Task analytics use
+`task`, `taskId`, or `taskName`. Benchmark, model, and task fields are also counted
+from page and compare events when present. If those explicit fields are missing,
+detail routes such as `/benchmarks/<id>`, `/models/<id>`, and `/tasks/<id>` are
+classified by `payload.title` when present, or by the decoded route slug as a
+fallback. Aggregate domain metrics also keep `pathCounts` and `titleCounts` so
+ranked entities can be traced back to the page context that produced them.
 
 The first funnel is fixed to one session path:
 

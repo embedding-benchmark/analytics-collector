@@ -7,7 +7,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Security, st
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from analytics_collector.analytics import aggregate_range, distribution, funnels, retention, summary
+from analytics_collector.analytics import aggregate_range, distribution, domain_distribution, funnels, retention, summary
 from analytics_collector.config import Settings, get_settings
 from analytics_collector.geo import Geo, GeoLookup, empty_geo, geo_debug, resolve_geo
 from analytics_collector.models import AcceptedResponse, AggregateResponse, AnalyticsBatch, AnalyticsDateRange
@@ -145,6 +145,60 @@ def create_app(
     ) -> dict:
         require_admin(settings, credentials)
         return await run_query(distribution(repository, start_date, end_date, "countries"))
+
+    @app.get("/v1/analytics/benchmarks")
+    async def analytics_benchmarks(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(domain_distribution(repository, start_date, end_date, "benchmarks"))
+
+    @app.get("/v1/analytics/models")
+    async def analytics_models(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(domain_distribution(repository, start_date, end_date, "models"))
+
+    @app.get("/v1/analytics/searches")
+    async def analytics_searches(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(domain_distribution(repository, start_date, end_date, "searches"))
+
+    @app.get("/v1/analytics/filters")
+    async def analytics_filters(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(domain_distribution(repository, start_date, end_date, "filters"))
+
+    @app.get("/v1/analytics/compares")
+    async def analytics_compares(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(domain_distribution(repository, start_date, end_date, "compares"))
+
+    @app.get("/v1/analytics/tasks")
+    async def analytics_tasks(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(domain_distribution(repository, start_date, end_date, "tasks"))
 
     @app.get("/v1/analytics/funnels")
     async def analytics_funnels(
