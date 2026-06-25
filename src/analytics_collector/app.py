@@ -7,7 +7,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Security, st
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from analytics_collector.analytics import aggregate_range, distribution, domain_distribution, funnels, retention, summary
+from analytics_collector.analytics import aggregate_range, compare_distribution, distribution, domain_distribution, funnels, retention, summary
 from analytics_collector.config import Settings, get_settings
 from analytics_collector.geo import Geo, GeoLookup, empty_geo, geo_debug, resolve_geo
 from analytics_collector.models import AcceptedResponse, AggregateResponse, AnalyticsBatch, AnalyticsDateRange
@@ -189,7 +189,7 @@ def create_app(
         credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
     ) -> dict:
         require_admin(settings, credentials)
-        return await run_query(domain_distribution(repository, start_date, end_date, "compares"))
+        return await run_query(compare_distribution(repository, start_date, end_date))
 
     @app.get("/v1/analytics/tasks")
     async def analytics_tasks(

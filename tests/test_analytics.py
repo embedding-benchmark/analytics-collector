@@ -310,21 +310,25 @@ def test_domain_distribution_endpoints_rank_by_sessions_with_event_and_visitor_c
 
     assert benchmarks.status_code == 200
     assert benchmarks.json()["items"] == [
-        {"benchmark": "MTEB(eng, v2)", "sessions": 3, "events": 3, "visitors": 3},
         {"benchmark": "MTEB English v2", "sessions": 2, "events": 2, "visitors": 2},
+        {"benchmark": "MTEB(eng, v2)", "sessions": 1, "events": 1, "visitors": 1},
     ]
     assert models.json()["items"] == [
-        {"model": "bge-large-en", "sessions": 3, "events": 3, "visitors": 3},
         {"model": "BGE Large EN", "sessions": 1, "events": 1, "visitors": 1},
         {"model": "GTE Large", "sessions": 1, "events": 1, "visitors": 1},
-        {"model": "e5-large-v2", "sessions": 1, "events": 1, "visitors": 1},
-        {"model": "gte-large", "sessions": 1, "events": 1, "visitors": 1},
+        {"model": "bge-large-en", "sessions": 1, "events": 1, "visitors": 1},
     ]
     assert searches.json()["items"] == [{"query": "retrieval", "sessions": 1, "events": 2, "visitors": 1}]
     assert filters.json()["items"] == [{"filterKey": "task", "filterValue": "Retrieval", "sessions": 1, "events": 1, "visitors": 1}]
     assert compares.json()["items"] == [
         {"comparison": "bge-large-en vs e5-large-v2", "sessions": 1, "events": 1, "visitors": 1},
         {"comparison": "bge-large-en vs gte-large", "sessions": 1, "events": 1, "visitors": 1},
+    ]
+    assert compares.json()["benchmarks"] == [{"benchmark": "MTEB(eng, v2)", "sessions": 2, "events": 2, "visitors": 2}]
+    assert compares.json()["models"] == [
+        {"model": "bge-large-en", "sessions": 2, "events": 2, "visitors": 2},
+        {"model": "e5-large-v2", "sessions": 1, "events": 1, "visitors": 1},
+        {"model": "gte-large", "sessions": 1, "events": 1, "visitors": 1},
     ]
     assert tasks.json()["items"] == [
         {"task": "Reranking", "sessions": 1, "events": 1, "visitors": 1},
@@ -333,6 +337,53 @@ def test_domain_distribution_endpoints_rank_by_sessions_with_event_and_visitor_c
     day_metric = repo.daily_metrics[0]
     assert day_metric["benchmarkMetrics"]["MTEB English v2"]["pathCounts"]["/benchmarks/mteb-english-v2"] == 1
     assert day_metric["benchmarkMetrics"]["MTEB English v2"]["titleCounts"] == {"MTEB English v2": 1}
+
+
+def test_compare_events_count_current_benchmark_and_model_fields():
+    client, repo = make_client()
+    base = datetime(2026, 6, 1, 10, 0, tzinfo=UTC)
+    repo.events.extend(
+        [
+            event(
+                visitor_id="visitor-1",
+                session_id="session-1",
+                event_name="compare_opened",
+                received_at=base,
+                payload={"source": "pinned_chip", "modelCount": 3, "benchmark": "MTEB(eng, v2)"},
+            ),
+            event(
+                visitor_id="visitor-2",
+                session_id="session-2",
+                event_name="compare_model_changed",
+                received_at=base + timedelta(minutes=1),
+                payload={
+                    "action": "added",
+                    "benchmark": "MTEB(eng, v2)",
+                    "model": "sentence-transformers/all-MiniLM-L6-v2",
+                    "modelCount": 2,
+                },
+            ),
+            event(
+                visitor_id="visitor-3",
+                session_id="session-3",
+                event_name="compare_model_changed",
+                received_at=base + timedelta(minutes=2),
+                payload={"action": "cleared", "benchmark": "MTEB(eng, v2)", "model": None, "modelCount": 0},
+            ),
+        ]
+    )
+    aggregate(client)
+
+    benchmarks = client.get("/v1/analytics/benchmarks?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    models = client.get("/v1/analytics/models?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+    compares = client.get("/v1/analytics/compares?startDate=2026-06-01&endDate=2026-06-02", headers=auth_headers())
+
+    assert benchmarks.json()["items"] == []
+    assert models.json()["items"] == []
+    assert compares.json()["benchmarks"] == [{"benchmark": "MTEB(eng, v2)", "sessions": 3, "events": 3, "visitors": 3}]
+    assert compares.json()["models"] == [
+        {"model": "sentence-transformers/all-MiniLM-L6-v2", "sessions": 1, "events": 1, "visitors": 1}
+    ]
 
 
 def test_funnel_counts_ordered_steps_within_same_session():

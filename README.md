@@ -166,8 +166,10 @@ fields when available:
 
 ```json
 {
+	"benchmark": "MTEB(eng, v2)",
 	"benchmarkId": "MTEB(eng, v2)",
 	"benchmarkName": "MTEB English v2",
+	"model": "sentence-transformers/all-MiniLM-L6-v2",
 	"modelId": "bge-large-en",
 	"modelName": "BGE Large EN",
 	"task": "Retrieval",
@@ -179,13 +181,28 @@ fields when available:
 ```
 
 `search_changed` uses `query`, `filter_changed` uses `filterKey` and `filterValue`,
-and compare events use `models`, `modelIds`, or `modelNames`. Task analytics use
-`task`, `taskId`, or `taskName`. Benchmark, model, and task fields are also counted
-from page and compare events when present. If those explicit fields are missing,
+and compare analytics use `benchmark` plus `model` for add/remove actions under the
+`/v1/analytics/compares` response. Legacy compare events can still use `models`,
+`modelIds`, or `modelNames`. Task analytics use
+`task`, `taskId`, or `taskName`. Global benchmark, model, and task fields are counted
+from non-compare events when present. If those explicit fields are missing,
 detail routes such as `/benchmarks/<id>`, `/models/<id>`, and `/tasks/<id>` are
 classified by `payload.title` when present, or by the decoded route slug as a
 fallback. Aggregate domain metrics also keep `pathCounts` and `titleCounts` so
 ranked entities can be traced back to the page context that produced them.
+
+The compare analytics endpoint returns the existing pairwise comparison ranking in
+`items`, plus compare-scoped `benchmarks` and `models` rankings:
+
+```json
+{
+	"startDate": "2026-06-01",
+	"endDate": "2026-06-30",
+	"items": [{ "comparison": "bge-large-en vs e5-large-v2", "sessions": 12, "events": 14, "visitors": 10 }],
+	"benchmarks": [{ "benchmark": "MTEB(eng, v2)", "sessions": 21, "events": 28, "visitors": 18 }],
+	"models": [{ "model": "sentence-transformers/all-MiniLM-L6-v2", "sessions": 9, "events": 11, "visitors": 8 }]
+}
+```
 
 The first funnel is fixed to one session path:
 
