@@ -117,6 +117,23 @@ async def domain_distribution(repository: EventRepository, start_date: date, end
     validate_range(start_date, end_date)
     metrics = await repository.list_daily_metrics(start_date, end_date)
     field, key_name = DOMAIN_FIELDS[kind]
+    items = domain_items(metrics, field, key_name, kind)
+    return {"startDate": start_date.isoformat(), "endDate": end_date.isoformat(), "items": items}
+
+
+async def compare_distribution(repository: EventRepository, start_date: date, end_date: date) -> dict[str, Any]:
+    validate_range(start_date, end_date)
+    metrics = await repository.list_daily_metrics(start_date, end_date)
+    return {
+        "startDate": start_date.isoformat(),
+        "endDate": end_date.isoformat(),
+        "items": domain_items(metrics, "compareMetrics", "comparison", "compares"),
+        "benchmarks": domain_items(metrics, "compareBenchmarkMetrics", "benchmark", "benchmarks"),
+        "models": domain_items(metrics, "compareModelMetrics", "model", "models"),
+    }
+
+
+def domain_items(metrics: list[dict], field: str, key_name: str, kind: str) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = defaultdict(lambda: {"events": 0, "sessionIds": set(), "visitorIds": set()})
     for metric in metrics:
         for key, value in metric.get(field, {}).items():
@@ -138,11 +155,7 @@ async def domain_distribution(repository: EventRepository, start_date: date, end
             item[key_name] = key
         items.append(item)
 
-    return {
-        "startDate": start_date.isoformat(),
-        "endDate": end_date.isoformat(),
-        "items": sorted(items, key=lambda item: (-item["sessions"], -item["events"], domain_sort_key(item, kind))),
-    }
+    return sorted(items, key=lambda item: (-item["sessions"], -item["events"], domain_sort_key(item, kind)))
 
 
 async def funnels(repository: EventRepository, start_date: date, end_date: date) -> dict[str, Any]:
@@ -244,6 +257,8 @@ def build_domain_metrics(events: list[dict]) -> dict[str, dict[str, dict[str, An
         "searchMetrics": defaultdict(empty_domain_metric),
         "filterMetrics": defaultdict(empty_domain_metric),
         "compareMetrics": defaultdict(empty_domain_metric),
+        "compareBenchmarkMetrics": defaultdict(empty_domain_metric),
+        "compareModelMetrics": defaultdict(empty_domain_metric),
         "taskMetrics": defaultdict(empty_domain_metric),
     }
     for event in events:
@@ -252,6 +267,8 @@ def build_domain_metrics(events: list[dict]) -> dict[str, dict[str, dict[str, An
         add_values(metrics["searchMetrics"], extract_searches(event), event)
         add_values(metrics["filterMetrics"], extract_filters(event), event)
         add_values(metrics["compareMetrics"], extract_compares(event), event)
+        add_values(metrics["compareBenchmarkMetrics"], extract_compare_benchmarks(event), event)
+        add_values(metrics["compareModelMetrics"], extract_compare_models(event), event)
         add_values(metrics["taskMetrics"], extract_tasks(event), event)
     return {name: public_domain_metrics(values) for name, values in metrics.items()}
 
@@ -312,6 +329,8 @@ def clean_strings(value: Any) -> list[str]:
 
 
 def extract_benchmarks(event: dict) -> list[str]:
+    if event["eventName"] in {"compare_opened", "compare_model_changed"}:
+        return []
     data = payload(event)
     return unique_values(
         [
@@ -323,6 +342,8 @@ def extract_benchmarks(event: dict) -> list[str]:
 
 
 def extract_models(event: dict) -> list[str]:
+    if event["eventName"] in {"compare_opened", "compare_model_changed"}:
+        return []
     data = payload(event)
     values = [
         *clean_strings(data.get("modelId")),
@@ -396,10 +417,39 @@ def route_segments(path: str) -> list[str]:
 def extract_compares(event: dict) -> list[str]:
     if event["eventName"] not in {"compare_opened", "compare_model_changed"}:
         return []
-    models = extract_models(event)
+    models = extract_compare_models(event)
     if len(models) < 2:
         return []
     return [" vs ".join(sorted(models[:2]))]
+
+
+def extract_compare_benchmarks(event: dict) -> list[str]:
+    if event["eventName"] not in {"compare_opened", "compare_model_changed"}:
+        return []
+    data = payload(event)
+    return unique_values(
+        [
+            *clean_strings(data.get("benchmark")),
+            *clean_strings(data.get("benchmarkId")),
+            *clean_strings(data.get("benchmarkName")),
+        ]
+    )
+
+
+def extract_compare_models(event: dict) -> list[str]:
+    if event["eventName"] not in {"compare_opened", "compare_model_changed"}:
+        return []
+    data = payload(event)
+    return unique_values(
+        [
+            *clean_strings(data.get("model")),
+            *clean_strings(data.get("modelId")),
+            *clean_strings(data.get("modelName")),
+            *clean_strings(data.get("modelIds")),
+            *clean_strings(data.get("modelNames")),
+            *clean_strings(data.get("models")),
+        ]
+    )
 
 
 def unique_values(values: list[str]) -> list[str]:
