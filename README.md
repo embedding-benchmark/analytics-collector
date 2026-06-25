@@ -35,6 +35,11 @@ Copy `.env.example` to `.env`.
 | `MONGO_URL` | `mongodb://localhost:27017` | MongoDB connection string. |
 | `MONGO_DATABASE` | `analytics` | MongoDB database name. |
 | `MONGO_COLLECTION` | `analytics_events` | Raw event collection name. |
+| `MONGO_HOURLY_COLLECTION` | `analytics_hourly_metrics` | Hourly aggregate metrics collection name. |
+| `MONGO_DAILY_COLLECTION` | `analytics_daily_metrics` | Daily aggregate metrics collection name. |
+| `MONGO_FUNNEL_COLLECTION` | `analytics_funnel_metrics` | Fixed funnel metrics collection name. |
+| `MONGO_RETENTION_COLLECTION` | `analytics_retention_metrics` | Retention cohort metrics collection name. |
+| `ANALYTICS_ADMIN_TOKEN` | unset | Bearer token required for internal analytics aggregation and query APIs. |
 | `IP_HASH_SALT` | `change-me` | Salt used to hash client IPs before storage. Change in production. |
 | `IPINFO_LITE_TOKEN` | unset | Optional IPinfo Lite token. When set, public client IPs are resolved to country-level geo after `CF-IPCountry` fallback. |
 | `GEO_LOOKUP_TIMEOUT_SECONDS` | `1.0` | Timeout for IPinfo Lite country lookup. Lookup failures do not reject analytics events. |
@@ -103,6 +108,60 @@ Supported `eventName` values:
 - `csv_downloaded`
 - `share_link_copied`
 - `external_link_clicked`
+
+### Internal Analytics APIs
+
+All analytics endpoints require:
+
+```text
+Authorization: Bearer <ANALYTICS_ADMIN_TOKEN>
+```
+
+Aggregate raw events into hourly, daily, funnel, and retention collections:
+
+```http
+POST /v1/analytics/aggregate
+```
+
+Request:
+
+```json
+{
+	"startDate": "2026-06-01",
+	"endDate": "2026-06-30"
+}
+```
+
+Response:
+
+```json
+{ "status": "ok", "rawEvents": 1234 }
+```
+
+Query endpoints accept `startDate` and `endDate` query parameters:
+
+```http
+GET /v1/analytics/summary?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/events?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/pages?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/countries?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/funnels?startDate=2026-06-01&endDate=2026-06-30
+GET /v1/analytics/retention?startDate=2026-06-01&endDate=2026-06-30
+```
+
+Summary uses automatic granularity: ranges of 7 days or less return hourly buckets;
+longer ranges return daily buckets. Totals include PV, unique visitors, sessions,
+and event count. Distribution endpoints return ranked event names, page paths, and
+countries.
+
+The first funnel is fixed to one session path:
+
+```text
+page_view -> search_changed/filter_changed -> compare_opened -> csv_downloaded/external_link_clicked
+```
+
+Retention cohorts use each visitor's first active date and report D1, D7, and D30
+returning visitors based on any later event.
 
 ## Anti-Abuse Strategy
 
@@ -185,6 +244,15 @@ db.analytics_events.createIndex({ "geo.country": 1, receivedAt: -1 });
 
 For dashboards, build trusted daily/hourly aggregates into a separate collection such as
 `analytics_daily_metrics` rather than scanning raw events for every request.
+
+Suggested aggregate indexes:
+
+```javascript
+db.analytics_hourly_metrics.createIndex({ date: 1, bucket: 1 });
+db.analytics_daily_metrics.createIndex({ date: 1 });
+db.analytics_funnel_metrics.createIndex({ date: 1, name: 1 });
+db.analytics_retention_metrics.createIndex({ cohortDate: 1 });
+```
 
 ## Test
 

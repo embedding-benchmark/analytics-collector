@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     mongo_url: str = "mongodb://localhost:27017"
     mongo_database: str = "analytics"
     mongo_collection: str = "analytics_events"
+    mongo_hourly_collection: str = "analytics_hourly_metrics"
+    mongo_daily_collection: str = "analytics_daily_metrics"
+    mongo_funnel_collection: str = "analytics_funnel_metrics"
+    mongo_retention_collection: str = "analytics_retention_metrics"
+    analytics_admin_token: str | None = None
     ip_hash_salt: str = "change-me"
     ipinfo_lite_token: str | None = None
     geo_lookup_timeout_seconds: float = 1.0

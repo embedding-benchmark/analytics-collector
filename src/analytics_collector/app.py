@@ -1,16 +1,21 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from analytics_collector.analytics import aggregate_range, distribution, funnels, retention, summary
 from analytics_collector.config import Settings, get_settings
 from analytics_collector.geo import Geo, GeoLookup, empty_geo, geo_debug, resolve_geo
-from analytics_collector.models import AcceptedResponse, AnalyticsBatch
+from analytics_collector.models import AcceptedResponse, AggregateResponse, AnalyticsBatch, AnalyticsDateRange
 from analytics_collector.rate_limit import InMemoryRateLimiter
 from analytics_collector.repository import EventRepository, MongoEventRepository
+
+
+admin_bearer = HTTPBearer(auto_error=False)
 
 
 def create_app(
@@ -24,6 +29,10 @@ def create_app(
         settings.mongo_url,
         settings.mongo_database,
         settings.mongo_collection,
+        hourly_collection=settings.mongo_hourly_collection,
+        daily_collection=settings.mongo_daily_collection,
+        funnel_collection=settings.mongo_funnel_collection,
+        retention_collection=settings.mongo_retention_collection,
     )
     limiter = InMemoryRateLimiter(settings.rate_limit_per_minute)
     app = FastAPI(title="Analytics Collector", version="0.1.0")
@@ -33,7 +42,7 @@ def create_app(
             CORSMiddleware,
             allow_origins=settings.allowed_origins,
             allow_methods=["POST", "GET", "OPTIONS"],
-            allow_headers=["content-type", "x-analytics-site-id"],
+            allow_headers=["authorization", "content-type", "x-analytics-site-id"],
         )
 
     app.state.settings = settings
@@ -85,6 +94,76 @@ def create_app(
         await repository.insert_events(enriched)
         return AcceptedResponse(accepted=len(enriched))
 
+    @app.post(
+        "/v1/analytics/aggregate",
+        response_model=AggregateResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def aggregate_metrics(
+        date_range: AnalyticsDateRange,
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> AggregateResponse:
+        require_admin(settings, credentials)
+        try:
+            result = await aggregate_range(repository, date_range.startDate, date_range.endDate)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        return AggregateResponse(**result)
+
+    @app.get("/v1/analytics/summary")
+    async def analytics_summary(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(summary(repository, start_date, end_date))
+
+    @app.get("/v1/analytics/events")
+    async def analytics_events(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(distribution(repository, start_date, end_date, "events"))
+
+    @app.get("/v1/analytics/pages")
+    async def analytics_pages(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(distribution(repository, start_date, end_date, "pages"))
+
+    @app.get("/v1/analytics/countries")
+    async def analytics_countries(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(distribution(repository, start_date, end_date, "countries"))
+
+    @app.get("/v1/analytics/funnels")
+    async def analytics_funnels(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(funnels(repository, start_date, end_date))
+
+    @app.get("/v1/analytics/retention")
+    async def analytics_retention(
+        start_date: date = Query(alias="startDate"),
+        end_date: date = Query(alias="endDate"),
+        credentials: HTTPAuthorizationCredentials | None = Security(admin_bearer),
+    ) -> dict:
+        require_admin(settings, credentials)
+        return await run_query(retention(repository, start_date, end_date))
+
     return app
 
 
@@ -94,6 +173,22 @@ def get_app_settings(request: Request) -> Settings:
 
 def get_repository(request: Request) -> EventRepository:
     return request.app.state.repository
+
+
+def require_admin(settings: Settings, credentials: HTTPAuthorizationCredentials | None) -> None:
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing authorization")
+    if not settings.analytics_admin_token:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="analytics admin token not configured")
+    if credentials.scheme.lower() != "bearer" or credentials.credentials != settings.analytics_admin_token:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid authorization")
+
+
+async def run_query(coro):
+    try:
+        return await coro
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 def origin_allowed(settings: Settings, origin: str | None, referer: str | None) -> bool:
